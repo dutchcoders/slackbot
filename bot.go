@@ -2,6 +2,7 @@ package slackbot
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 	"net/url"
 	"time"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -75,6 +76,7 @@ type Bot struct {
 	config   Config
 	handlers map[EventType]handlerFunc
 	id       int
+	messages map[int]Message
 }
 
 type handlerFunc func(*Bot, map[string]interface{}) error
@@ -116,13 +118,14 @@ func (b *Bot) reconnect() error {
 	var err error
 
 	for {
-		time.Sleep(15 * time.Second)
-
 		log.Printf("Connect failed with err %s, reconnecting.\n", err)
 
 		if err = b.connect(); err == nil {
 			break
 		}
+
+		time.Sleep(15 * time.Second)
+
 	}
 
 	return err
@@ -160,7 +163,8 @@ func deepMerge(dst interface{}, src map[string]interface{}) error {
 }
 
 func (b *Bot) receive(data *map[string]interface{}) error {
-	err := websocket.JSON.Receive(b.ws, &data)
+	//err := websocket.JSON.Receive(b.ws, &data)
+	err := b.ws.ReadJSON(&data)
 	return err
 }
 
@@ -175,26 +179,8 @@ func (b *Bot) NewMessage() Message {
 }
 
 func (b *Bot) Send(message Message) error {
-	if err := websocket.JSON.Send(b.ws, message); err != nil {
-		return err
-	}
-
-	var confirmation struct {
-		Ok        bool   `json:"ok"`
-		ReplyTo   int    `json:"reply_to"`
-		TimeStamp string `json:"ts"`
-		Text      string `json:"text"`
-	}
-
-	// wait for confirmation
-	if err := websocket.JSON.Receive(b.ws, &confirmation); err != nil {
-		return err
-	}
-
-	if confirmation.ReplyTo != message.Id {
-	}
-
-	return nil
+	err := b.ws.WriteJSON(message)
+	return err
 }
 
 func (b *Bot) Run() error {
@@ -215,6 +201,24 @@ func (b *Bot) Run() error {
 			continue
 		}
 
+		fmt.Println("Received %#v", data)
+		/*
+			var confirmation struct {
+				Ok        bool   `json:"ok"`
+				ReplyTo   int    `json:"reply_to"`
+				TimeStamp string `json:"ts"`
+				Text      string `json:"text"`
+			}
+
+			// wait for confirmation
+			if err := websocket.JSON.Receive(b.ws, &confirmation); err != nil {
+				return err
+			}
+
+			if confirmation.ReplyTo != message.Id {
+			}
+
+		*/
 		if fn, ok := b.handlers[EventType(event.Type)]; ok {
 			err := fn(b, data)
 			if err != nil {
@@ -257,7 +261,13 @@ func (b *Bot) connect() error {
 		return errors.New(response.Error)
 	}
 
-	b.ws, err = websocket.Dial(response.Url, "", b.config.Origin)
+	header := http.Header{
+		"Origin": {b.config.Origin},
+		// your milage may differ
+		"Sec-WebSocket-Extensions": {"permessage-deflate; client_max_window_bits, x-webkit-deflate-frame"},
+	}
+
+	b.ws, _, err = websocket.DefaultDialer.Dial(response.Url, header)
 	if err != nil {
 		return err
 	}

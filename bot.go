@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"errors"
@@ -83,12 +84,31 @@ type handlerFunc func(*Bot, map[string]interface{}) error
 type MessageFunc func(*Bot, *Message) error
 type EventType string
 
+type Timestamp time.Time
+
+func (t *Timestamp) MarshalJSON() ([]byte, error) {
+	ts := time.Time(*t).Unix()
+	stamp := fmt.Sprint(ts)
+	return []byte(stamp), nil
+}
+
+func (t *Timestamp) UnmarshalJSON(b []byte) error {
+	ts, err := strconv.ParseFloat(string(b), 64)
+	fmt.Println(err)
+	if err != nil {
+		return err
+	}
+	*t = Timestamp(time.Unix(int64(ts), 0))
+	return nil
+}
+
 type Message struct {
-	Id      int    `json:"id"`
-	Type    string `json:"type"`
-	Channel string `json:"channel"`
-	User    string `json:"user"`
-	Text    string `json:"text"`
+	Id        int       `json:"id"`
+	Type      string    `json:"type"`
+	Channel   string    `json:"channel"`
+	User      string    `json:"user"`
+	Text      string    `json:"text"`
+	Timestamp Timestamp `json:"ts"`
 }
 
 type Event struct {

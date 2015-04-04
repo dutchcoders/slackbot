@@ -61,6 +61,12 @@ func pick(sc *slackbot.Context, w http.ResponseWriter) {
 }
 ```
 
+## Testing
+
+```
+curl -X POST --data "text=test&trigger_word={word}&command={/command}" http://127.0.0.1:5100/
+```
+
 ## Contributions
 
 Contributions are welcome.

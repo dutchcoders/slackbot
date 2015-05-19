@@ -101,7 +101,7 @@ func (t *Timestamp) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	*t = Timestamp(time.Unix(int64(ts), 0))
+	*t = Timestamp(time.Unix(0, int64(ts*1e9)))
 	return nil
 }
 

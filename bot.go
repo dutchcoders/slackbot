@@ -1,14 +1,14 @@
 package slackbot
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"reflect"
-	"strconv"
-	"strings"
 
 	"errors"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -80,7 +80,7 @@ type Bot struct {
 	messages map[int]Message
 }
 
-type handlerFunc func(*Bot, map[string]interface{}) error
+type handlerFunc func(*Bot, []byte) error
 type MessageFunc func(*Bot, *Message) error
 type EventType string
 
@@ -93,8 +93,11 @@ func (t *Timestamp) MarshalJSON() ([]byte, error) {
 }
 
 func (t *Timestamp) UnmarshalJSON(b []byte) error {
-	ts, err := strconv.ParseFloat(string(b), 64)
+	var ts float64
+	buf := bytes.NewReader(b)
+	err := binary.Read(buf, binary.LittleEndian, &ts)
 	fmt.Println(err)
+	fmt.Println(ts)
 	if err != nil {
 		return err
 	}
@@ -102,23 +105,48 @@ func (t *Timestamp) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-type Message struct {
+type Event struct {
 	Id        int       `json:"id"`
 	Type      string    `json:"type"`
 	Channel   string    `json:"channel"`
 	User      string    `json:"user"`
-	Text      string    `json:"text"`
 	Timestamp Timestamp `json:"ts"`
 }
 
-type Event struct {
-	Type string
+type Message struct {
+	Id          int          `json:"id"`
+	Type        string       `json:"type"`
+	Channel     string       `json:"channel"`
+	User        string       `json:"user"`
+	Username    string       `json:"username"`
+	BotId       string       `json:"bot_id"`
+	Text        string       `json:"text"`
+	Timestamp   Timestamp    `json:"ts"`
+	Attachments []Attachment `json:"attachments"`
+}
+
+type Attachment struct {
+	Fallback    string `json:"fallback"`
+	ImageWidth  int    `json:"image_width"`
+	ImageHeight int    `json:"image_height"`
+	ImageBytes  int    `json:"image_bytes"`
+	AuthorName  string `json:"author_name"`
+	Id          int    `json:"id"`
+	TitleLink   string `json:"title_link"`
+	FromUrl     string `json:"from_url"`
+	ImageUrl    string `json:"image_url"`
+	Text        string `json:"text"`
+	Title       string `json:"title"`
+	AuthorLink  string `json:"author_link"`
+	Type        string `json:"type"`
+	Subtype     string `json:"subtype"`
+	Channel     string `json:"channel"`
 }
 
 func MessageHandler(fn MessageFunc) handlerFunc {
-	return func(b *Bot, data map[string]interface{}) error {
+	return func(b *Bot, data []byte) error {
 		var message Message
-		if err := merge(&message, data); err != nil {
+		if err := json.Unmarshal(data, &message); err != nil {
 			return err
 		}
 		err := fn(b, &message)
@@ -153,39 +181,20 @@ func (b *Bot) reconnect() error {
 
 var ErrNotSupported = errors.New("Not supported")
 
-func merge(dst interface{}, src map[string]interface{}) error {
-	vDst := reflect.ValueOf(dst).Elem()
-	if vDst.Kind() != reflect.Struct {
-		return ErrNotSupported
+func (b *Bot) receive() ([]byte, error) {
+	_, r, err := b.ws.NextReader()
+	if err != nil {
+		return nil, err
 	}
 
-	vSrc := reflect.ValueOf(src)
-	if vSrc.Kind() != reflect.Map {
-		return ErrNotSupported
+	data, err := ioutil.ReadAll(r)
+	if err == io.EOF {
+		// Decode returns io.EOF when the message is empty or all whitespace.
+		// Convert to io.ErrUnexpectedEOF so that application can distinguish
+		// between an error reading the JSON value and the connection closing.
+		err = io.ErrUnexpectedEOF
 	}
-
-	return deepMerge(dst, src)
-}
-
-func deepMerge(dst interface{}, src map[string]interface{}) error {
-	tDst := reflect.TypeOf(dst).Elem()
-	for i := 0; i < tDst.NumField(); i++ {
-		tField := tDst.Field(i)
-		fieldName := strings.ToLower(tField.Name)
-		if _, ok := src[fieldName]; !ok {
-			continue
-		}
-		// if field is struct, and src is map, recurse
-		val := reflect.ValueOf(src[fieldName])
-		reflect.ValueOf(dst).Elem().Field(i).Set(val)
-	}
-	return nil
-}
-
-func (b *Bot) receive(data *map[string]interface{}) error {
-	//err := websocket.JSON.Receive(b.ws, &data)
-	err := b.ws.ReadJSON(&data)
-	return err
+	return data, err
 }
 
 func (b *Bot) NewMessage() Message {
@@ -205,40 +214,21 @@ func (b *Bot) Send(message Message) error {
 
 func (b *Bot) Run() error {
 	for {
-		var data map[string]interface{}
+		var event Event
 
-		err := b.receive(&data)
-		if err == io.EOF {
+		data, err := b.receive()
+
+		err = json.Unmarshal(data, &event)
+		if err == io.ErrUnexpectedEOF {
 			err = b.reconnect()
 			continue
 		} else if err != nil {
 			return err
 		}
 
-		var event Event
-		if err = merge(&event, data); err != nil {
-			log.Printf("Error merging %#v.\n", err)
-			continue
-		}
+		fmt.Println("Received %#v", event)
+		fmt.Println(string(data))
 
-		fmt.Println("Received %#v", data)
-		/*
-			var confirmation struct {
-				Ok        bool   `json:"ok"`
-				ReplyTo   int    `json:"reply_to"`
-				TimeStamp string `json:"ts"`
-				Text      string `json:"text"`
-			}
-
-			// wait for confirmation
-			if err := websocket.JSON.Receive(b.ws, &confirmation); err != nil {
-				return err
-			}
-
-			if confirmation.ReplyTo != message.Id {
-			}
-
-		*/
 		if fn, ok := b.handlers[EventType(event.Type)]; ok {
 			err := fn(b, data)
 			if err != nil {

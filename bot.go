@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
-
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -87,17 +87,26 @@ type EventType string
 type Timestamp time.Time
 
 func (t *Timestamp) MarshalJSON() ([]byte, error) {
-	ts := time.Time(*t).Unix()
-	stamp := fmt.Sprint(ts)
-	return []byte(stamp), nil
+	/*
+		ts := time.Time(*t).Unix()
+		stamp := fmt.Sprint(ts)
+		return []byte(stamp), nil
+	*/
+	return []byte(t.Format(`"` + time.RFC3339Nano + `"`)), nil
 }
 
 func (t *Timestamp) UnmarshalJSON(b []byte) error {
 	var ts float64
-	buf := bytes.NewReader(b)
-	err := binary.Read(buf, binary.LittleEndian, &ts)
-	fmt.Println(err)
-	fmt.Println(ts)
+	var err error
+
+	// check if string representation
+	if b[0] == '"' {
+		ts, err = strconv.ParseFloat(string(b[1:len(b)-2]), 64)
+	} else {
+		buf := bytes.NewReader(b)
+		err = binary.Read(buf, binary.LittleEndian, &ts)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -106,41 +115,41 @@ func (t *Timestamp) UnmarshalJSON(b []byte) error {
 }
 
 type Event struct {
-	Id        int       `json:"id"`
-	Type      string    `json:"type"`
-	Channel   string    `json:"channel"`
-	User      string    `json:"user"`
-	Timestamp Timestamp `json:"ts"`
+	Id        int       `json:"id,omitempty"`
+	Type      string    `json:"type,omitempty"`
+	Channel   string    `json:"channel,omitempty"`
+	User      string    `json:"user,omitempty"`
+	Timestamp Timestamp `json:"ts,omitempty"`
 }
 
 type Message struct {
-	Id          int          `json:"id"`
-	Type        string       `json:"type"`
-	Channel     string       `json:"channel"`
-	User        string       `json:"user"`
-	Username    string       `json:"username"`
-	BotId       string       `json:"bot_id"`
-	Text        string       `json:"text"`
-	Timestamp   Timestamp    `json:"ts"`
-	Attachments []Attachment `json:"attachments"`
+	Id          int          `json:"id,omitempty"`
+	Type        string       `json:"type,omitempty"`
+	Channel     string       `json:"channel,omitempty"`
+	User        string       `json:"user,omitempty"`
+	Username    string       `json:"username,omitempty"`
+	BotId       string       `json:"bot_id,omitempty"`
+	Text        string       `json:"text,omitempty"`
+	Timestamp   Timestamp    `json:"ts,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 type Attachment struct {
-	Fallback    string `json:"fallback"`
-	ImageWidth  int    `json:"image_width"`
-	ImageHeight int    `json:"image_height"`
-	ImageBytes  int    `json:"image_bytes"`
-	AuthorName  string `json:"author_name"`
-	Id          int    `json:"id"`
-	TitleLink   string `json:"title_link"`
-	FromUrl     string `json:"from_url"`
-	ImageUrl    string `json:"image_url"`
-	Text        string `json:"text"`
-	Title       string `json:"title"`
-	AuthorLink  string `json:"author_link"`
-	Type        string `json:"type"`
-	Subtype     string `json:"subtype"`
-	Channel     string `json:"channel"`
+	Fallback    string `json:"fallback,omitempty"`
+	ImageWidth  int    `json:"image_width,omitempty"`
+	ImageHeight int    `json:"image_height,omitempty"`
+	ImageBytes  int    `json:"image_bytes,omitempty"`
+	AuthorName  string `json:"author_name,omitempty"`
+	Id          int    `json:"id,omitempty"`
+	TitleLink   string `json:"title_link,omitempty"`
+	FromUrl     string `json:"from_url,omitempty"`
+	ImageUrl    string `json:"image_url,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Title       string `json:"title,omitempty"`
+	AuthorLink  string `json:"author_link,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Subtype     string `json:"subtype,omitempty"`
+	Channel     string `json:"channel,omitempty"`
 }
 
 func MessageHandler(fn MessageFunc) handlerFunc {
@@ -217,8 +226,6 @@ func (b *Bot) Run() error {
 		var event Event
 
 		data, err := b.receive()
-
-		err = json.Unmarshal(data, &event)
 		if err == io.ErrUnexpectedEOF {
 			err = b.reconnect()
 			continue
@@ -226,8 +233,13 @@ func (b *Bot) Run() error {
 			return err
 		}
 
+		if err = json.Unmarshal(data, &event); err != nil {
+			// ignore decoding errors
+			fmt.Println("Could not decode: ", string(data))
+			continue
+		}
+
 		fmt.Println("Received %#v", event)
-		fmt.Println(string(data))
 
 		if fn, ok := b.handlers[EventType(event.Type)]; ok {
 			err := fn(b, data)
